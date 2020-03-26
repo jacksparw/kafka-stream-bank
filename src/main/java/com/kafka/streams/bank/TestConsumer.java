@@ -47,6 +47,5 @@ public class TestConsumer {
             }
             kafkaConsumer.commitSync();
         }
-
     }
 }

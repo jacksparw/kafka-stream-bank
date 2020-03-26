@@ -11,17 +11,21 @@ import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
+import org.apache.kafka.streams.state.QueryableStoreTypes;
+import org.apache.kafka.streams.state.ReadOnlyKeyValueStore;
 
 import java.util.Properties;
 
-public class BankBalanceExactlyOnceApp {
+public class BankBalanceQueryLocalKeyValueStore {
 
     public static void main(String[] args) {
 
@@ -51,15 +55,26 @@ public class BankBalanceExactlyOnceApp {
                         Materialized.<String, Balance, KeyValueStore<Bytes, byte[]>>as("bank-balance-stream")
                                 .withKeySerde(Serdes.String())
                                 .withValueSerde(balanceSerde)
-                )
-                .toStream()
-                .to("bank-balance-exactly-once", Produced.with(Serdes.String(), balanceSerde));
+                );
 
         KafkaStreams streams = new KafkaStreams(builder.build(), config);
         streams.start();
 
-        Runtime.getRuntime().addShutdownHook(new Thread(streams::close));
+        new Thread(() -> queryLocalKeyValueStore(streams)).start();
 
+        Runtime.getRuntime().addShutdownHook(new Thread(streams::close));
+    }
+
+    private static void queryLocalKeyValueStore(KafkaStreams streams) {
+        while (true) {
+            if(streams.state().name().equalsIgnoreCase("RUNNING")) {
+                ReadOnlyKeyValueStore<String, Balance> keyValueStore =
+                        streams.store("bank-balance-stream", QueryableStoreTypes.keyValueStore());
+
+                System.out.println("john:" + keyValueStore.get("john"));
+                break;
+            }
+        }
     }
 
     private static Balance newBalance(Transaction transaction, Balance balance) {
