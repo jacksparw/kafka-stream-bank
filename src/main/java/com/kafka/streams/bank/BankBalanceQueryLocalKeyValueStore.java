@@ -11,19 +11,18 @@ import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Materialized;
-import org.apache.kafka.streams.kstream.Produced;
-import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.QueryableStoreTypes;
 import org.apache.kafka.streams.state.ReadOnlyKeyValueStore;
 
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 public class BankBalanceQueryLocalKeyValueStore {
 
@@ -58,23 +57,48 @@ public class BankBalanceQueryLocalKeyValueStore {
                 );
 
         KafkaStreams streams = new KafkaStreams(builder.build(), config);
-        streams.start();
 
-        new Thread(() -> queryLocalKeyValueStore(streams)).start();
+
+        startKafkaStreams(streams);
 
         Runtime.getRuntime().addShutdownHook(new Thread(streams::close));
     }
 
-    private static void queryLocalKeyValueStore(KafkaStreams streams) {
-        while (true) {
-            if(streams.state().name().equalsIgnoreCase("RUNNING")) {
-                ReadOnlyKeyValueStore<String, Balance> keyValueStore =
-                        streams.store("bank-balance-stream", QueryableStoreTypes.keyValueStore());
+    private static void startKafkaStreams(KafkaStreams streams) {
+        CompletableFuture<KafkaStreams.State> stateFuture = new CompletableFuture<>();
+        streams.setStateListener((newState, oldState) -> kafkaStateListener(stateFuture, newState));
 
-                System.out.println("john:" + keyValueStore.get("john"));
-                break;
+        streams.start();
+
+        try {
+            KafkaStreams.State finalState = stateFuture.get();
+            if (finalState == KafkaStreams.State.RUNNING) {
+                queryLocalKeyValueStore(streams);
             }
+        } catch (InterruptedException ex) {
+            ex.printStackTrace();
+        } catch (ExecutionException ex) {
+            ex.printStackTrace();
         }
+    }
+
+    private static void kafkaStateListener(CompletableFuture<KafkaStreams.State> stateFuture, KafkaStreams.State newState) {
+        if (stateFuture.isDone()) {
+            return;
+        }
+
+        if (newState == KafkaStreams.State.RUNNING || newState == KafkaStreams.State.ERROR) {
+            stateFuture.complete(newState);
+        }
+    }
+
+    private static void queryLocalKeyValueStore(KafkaStreams streams) {
+
+        ReadOnlyKeyValueStore<String, Balance> keyValueStore =
+                streams.store("bank-balance-stream",
+                        QueryableStoreTypes.keyValueStore());
+
+        System.out.println("john:" + keyValueStore.get("john"));
     }
 
     private static Balance newBalance(Transaction transaction, Balance balance) {
